@@ -1,57 +1,62 @@
 import { db } from "../../../config/bd.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import nodemailer from 'nodemailer';
+
 export const register = (req, res) => {
-  // Check if required fields are present in the request body
-  if (
-    !req.body.email ||
-    !req.body.name ||
-    !req.body.userName ||
-    !req.body.numTelephone ||
-    !req.body.password ||
-    !req.body.profile
-  ) {
-    return res.status(400).json("Missing required fields.");
+  console.log('Requête reçue:', req.body);
+
+  const requiredFields = ['email', 'nom', 'prenom', 'password', 'profile', 'role', 'genre'];
+  const missingFields = requiredFields.filter(field => !req.body[field]);
+
+  if (missingFields.length > 0) {
+    console.log('Champs manquants:', missingFields);
+    return res.status(400).json({ error: "Missing required fields.", fields: missingFields });
   }
 
-  const q =
-    "SELECT * FROM user WHERE email = ? OR (name = ? AND userName = ? AND numTelephone=?)";
-  db.query(
-    q,
-    [req.body.email, req.body.name, req.body.userName, req.body.numTelephone],
-    (err, data) => {
-      if (err) return res.json(err);
-      if (data.length) return res.status(409).json("User already exists!");
-
-      // Hash the password and create a user
-      const salt = bcrypt.genSaltSync(10);
-      const hash = bcrypt.hashSync(req.body.password, salt);
-
-      const insertQuery =
-        "INSERT INTO user(`name`, `userName`, `email`, `password`, `profile`, `numTelephone`) VALUES (?)";
-      const values = [
-        req.body.name,
-        req.body.userName,
-        req.body.email,
-        hash,
-        req.body.profile,
-        req.body.numTelephone,
-      ];
-
-      db.query(insertQuery, [values], (err, data) => {
-        if (err) return res.json(err);
-        return res.status(200).json("User has been created.");
-      });
+  const q = "SELECT * FROM utilisateur WHERE email = ? OR (nom = ? AND prenom = ?)";
+  db.query(q, [req.body.email, req.body.nom, req.body.prenom], (err, data) => {
+    if (err) {
+      console.error('Erreur lors de la vérification de l\'utilisateur:', err);
+      return res.status(500).json({ error: "Internal server error" });
     }
-  );
+    if (data.length) {
+      console.log('Utilisateur existant:', data);
+      return res.status(409).json({ error: "User already exists!" });
+    }
+
+    // Hash the password and create a user
+    const salt = bcrypt.genSaltSync(10);
+    const hash = bcrypt.hashSync(req.body.password, salt);
+
+    const insertQuery = "INSERT INTO utilisateur(`nom`, `prenom`, `email`, `password`, `profile`, `role`, `genre` ) VALUES (?)";
+    const values = [
+      req.body.nom,
+      req.body.prenom,
+      req.body.email,
+      hash,
+      req.body.profile,
+      req.body.role,
+      req.body.genre,
+    ];
+
+    db.query(insertQuery, [values], (err, data) => {
+      if (err) {
+        console.error("Erreur d'insertion dans la base de données :", err);
+        return res.status(500).json({ error: "Erreur lors de la création de l'utilisateur." });
+      }
+      console.log("Nouvel utilisateur ajouté avec succès :", data);
+      return res.status(200).json({ message: "User has been created." });
+    });
+  });
 };
+
 export const login = (req, res) => {
-  const q = "SELECT * FROM user WHERE email=?";
+  const q = "SELECT * FROM utilisateur WHERE email=?";
   db.query(q, [req.body.email], (err, data) => {
     if (err) return res.json(err);
     if (data.length === 0) return res.status(404).json("User not found!");
 
-    // Vérifier le mot de passe
     const isPasswordCorrect = bcrypt.compareSync(
       req.body.password,
       data[0].password
@@ -59,28 +64,27 @@ export const login = (req, res) => {
     if (!isPasswordCorrect)
       return res.status(400).json("Wrong password or username");
 
-      // Vérifier si l'identifiant de l'utilisateur est accessible
-      if (!data[0].IdUser) {
-        console.error("User id not found:", data[0]);
-        return res.status(500).json("User id not found!");
-      }
-      
-      const token = jwt.sign({ id: data[0].IdUser }, "jwtkey");
-      
-      // Debug: Log token and other data if needed
-      console.log("Generated token:", token);
-      console.log("Other user data:", data[0]);
-      
-      const { password, ...other } = data[0];
-      
-      res
+    // Vérifier si l'utilisateur est accepté
+    const userStatus = data[0].status; // Obtenez le statut de l'utilisateur
+
+    if (!data[0].idUtilisateur) {
+      console.error("User id not found:", data[0]);
+      return res.status(500).json("User id not found!");
+    }
+
+    const token = jwt.sign({ id: data[0].idUtilisateur }, "jwtkey");
+    const { password, ...other } = data[0];
+
+    res
       .cookie("access_token", token, {
         httpOnly: true,
       })
       .status(200)
-      .json({token,user:other});
-    });
-  };
+      .json({ token, user: other, status: userStatus }); // Ajoutez le statut à la réponse
+  });
+};
+
+
 
   export const logout = (req, res) => {
     res
@@ -95,7 +99,7 @@ export const login = (req, res) => {
   export const checkUserByEmail = (req, res) => {
     const { email } = req.body;
   
-    const q = "SELECT name, userName, email FROM user WHERE email = ?";
+    const q = "SELECT nom, prenom, email, role, genre FROM utilisateur WHERE email = ?";
     db.query(q, [email], (error, results) => {
       if (error) {
         console.error(error);
@@ -106,7 +110,7 @@ export const login = (req, res) => {
         return res.status(404).json({ message: 'User not found' });
       }
   
-      const userInfo = { name: results[0].name, userName: results[0].userName, email: results[0].email };
+      const userInfo = { nom: results[0].nom, prenom: results[0].prenom, email: results[0].email, role: results[0].role, genre: results[0].genre };
       res.status(200).json({ message: 'User found', user: userInfo });
     });
   };
@@ -118,7 +122,7 @@ export const login = (req, res) => {
     const code = Math.floor(100000 + Math.random() * 900000);
   
     // Enregistrer le code dans la base de données de l'utilisateur
-    const updateQuery = "UPDATE user SET resetCode = ? WHERE email = ?";
+    const updateQuery = "UPDATE utilisateur SET resetCode = ? WHERE email = ?";
     db.query(updateQuery, [code, email], (updateError, updateResults) => {
       if (updateError) {
         console.error(updateError);
@@ -129,13 +133,13 @@ export const login = (req, res) => {
       const transporter = nodemailer.createTransport({
         service: 'Gmail',
         auth: {
-          user: 'zmcracky@gmail.com', // Remplacez par votre adresse email Gmail
-          pass: '' // Remplacez par le mot de passe de votre compte Gmail
+          user: 'itokkiralaiarivelo@gmail.com', // Remplacez par votre adresse email Gmail
+          pass: '' // Remplacez par le mot de passe d'application de votre compte Gmail
         }
       });
   
       transporter.sendMail({
-        from: 'zmcracky@gmail.com',
+        from: 'itokkiralaiarivelo@gmail.com',
         to: email,
         subject: 'Code de vérification',
         text: `Votre code de vérification est : ${code}`
